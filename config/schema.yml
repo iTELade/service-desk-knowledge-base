@@ -1,0 +1,54 @@
+version: 1
+required_fields:
+  - article_id
+  - language
+  - status
+  - visibility
+  - category
+  - slug
+  - title
+  - summary
+  - service_desk
+
+fields:
+  article_id:
+    type: string
+    pattern: '^kb-[0-9]{4,}$'
+  language:
+    type: string
+    allowed: [en, pl]
+  translation_of:
+    type: [string, 'null']
+    allowed: [en, pl, null]
+  status:
+    type: string
+    allowed: [draft, review, published, archived]
+  visibility:
+    type: string
+    allowed: [public, internal, restricted]
+  category:
+    type: string
+  slug:
+    type: string
+    pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+  title:
+    type: string
+  summary:
+    type: string
+  tags:
+    type: array
+    items: string
+  service_desk:
+    type: object
+    required: [sync, project_keys, article_key]
+    properties:
+      sync:
+        type: boolean
+      project_keys:
+        type: array
+        items: string
+      article_key:
+        type: [string, 'null']
+  updated_at:
+    type: string
+    format: date
