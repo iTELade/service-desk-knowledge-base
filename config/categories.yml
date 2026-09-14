@@ -1,0 +1,25 @@
+version: 1
+categories:
+  - key: getting-started
+    title:
+      en: Getting started
+      pl: Pierwsze kroki
+    order: 10
+
+  - key: troubleshooting
+    title:
+      en: Troubleshooting
+      pl: Rozwiązywanie problemów
+    order: 20
+
+  - key: administration
+    title:
+      en: Administration
+      pl: Administracja
+    order: 30
+
+  - key: security
+    title:
+      en: Security
+      pl: Bezpieczeństwo
+    order: 40
