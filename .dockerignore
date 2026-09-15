@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+npm-debug.log
+Dockerfile*
+compose*.yml
+README.md
+docs
+templates
+config
