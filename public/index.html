@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0c2d57">
+  <meta name="description" content="iTELade Knowledge Base — spaces, pages and collaborative documentation.">
+  <title>iTELade Knowledge Base</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css?v=0.5.0">
+  <script defer src="/app.js?v=0.5.0"></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <div id="app" class="app-shell">
+    <header class="global-header">
+      <a class="brand" href="#/home" aria-label="Knowledge Base home">
+        <span class="brand-mark">KB</span>
+        <span><strong id="brand-name">iTELade Knowledge Base</strong><small>Documentation workspace</small></span>
+      </a>
+      <div class="global-search-wrap">
+        <span class="search-icon">⌕</span>
+        <input id="global-search" autocomplete="off" placeholder="Search knowledge…" aria-label="Search knowledge">
+        <kbd>/</kbd>
+        <div id="search-popover" class="search-popover" hidden></div>
+      </div>
+      <div class="header-actions">
+        <button id="new-page" class="button primary" hidden>＋ Create</button>
+        <button id="language-toggle" class="icon-button" title="Language">EN</button>
+        <button id="account-button" class="account-button"><span class="avatar">?</span><span class="account-name">Sign in</span></button>
+      </div>
+    </header>
+
+    <aside id="sidebar" class="sidebar">
+      <nav class="primary-nav" aria-label="Knowledge navigation">
+        <a href="#/home" data-route="home">⌂ <span>Home</span></a>
+        <a href="#/recent" data-auth data-route="recent">◷ <span>Recent</span></a>
+        <a href="#/favorites" data-auth data-route="favorites">★ <span>Starred</span></a>
+      </nav>
+      <div class="sidebar-heading"><span>Spaces</span><button id="new-space" class="mini-button" hidden title="Create space">＋</button></div>
+      <div id="space-list" class="space-list"></div>
+      <div id="page-tree" class="page-tree"></div>
+      <div class="sidebar-footer">
+        <a href="#/admin" id="admin-link" hidden>⚙ <span>Administration</span></a>
+        <div class="version">Knowledge Base <strong>0.5.0</strong></div>
+      </div>
+    </aside>
+
+    <main id="content" class="content" tabindex="-1">
+      <div class="skeleton-page"><div></div><div></div><div></div></div>
+    </main>
+  </div>
+
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+  <dialog id="modal" class="modal"></dialog>
+</body>
+</html>
