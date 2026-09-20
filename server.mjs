@@ -4,7 +4,7 @@ import {join,extname,basename,relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomBytes,randomUUID,scryptSync,timingSafeEqual,createHash} from 'node:crypto';
 
-export const VERSION='0.5.0';
+export const VERSION='0.5.1';
 export const SCHEMA_VERSION=1;
 const ROOT=fileURLToPath(new URL('.',import.meta.url));
 const PUBLIC=join(ROOT,'public');
@@ -69,8 +69,18 @@ async function importLegacyArticles(target){
 
 async function loadState(){
   await mkdir(UPLOAD_DIR,{recursive:true});
-  try{const parsed=JSON.parse(await readFile(STATE_FILE,'utf8'));state={...blankState(),...parsed};for(const key of ['users','spaces','pages','revisions','comments','attachments','favorites','watches','recents','audit','tokens'])if(!Array.isArray(state[key]))state[key]=[];state.schemaVersion=SCHEMA_VERSION;}
-  catch{state=blankState();await importLegacyArticles(state);await persist();}
+  let raw;
+  try{raw=await readFile(STATE_FILE,'utf8');}
+  catch(err){
+    if(err?.code!=='ENOENT')throw new Error(`Cannot read Knowledge Base state: ${err.message}`);
+    state=blankState();await importLegacyArticles(state);await persist();return;
+  }
+  let parsed;
+  try{parsed=JSON.parse(raw);}catch(err){throw new Error(`Knowledge Base state is corrupted and was not replaced: ${err.message}`);}
+  if(Number(parsed.schemaVersion||1)>SCHEMA_VERSION)throw new Error(`Knowledge Base data schema ${parsed.schemaVersion} is newer than supported schema ${SCHEMA_VERSION}`);
+  state={...blankState(),...parsed};
+  for(const key of ['users','spaces','pages','revisions','comments','attachments','favorites','watches','recents','audit','tokens'])if(!Array.isArray(state[key]))state[key]=[];
+  state.schemaVersion=SCHEMA_VERSION;
 }
 
 async function persist(){
@@ -91,8 +101,8 @@ function sessionContext(req){const token=parseCookies(req).kb_session,s=token&&s
 function newSession(user){const token=randomBytes(32).toString('hex'),session={userId:user.id,csrf:randomBytes(24).toString('hex'),expiresAt:Date.now()+SESSION_TTL};sessions.set(token,session);return {token,session};}
 function cookie(token,maxAge=86400){return `kb_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${process.env.KB_SECURE_COOKIE==='false'?'':'; Secure'}`;}
 
-function sendJson(res,status,data,headers={}){res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff',...headers});res.end(JSON.stringify(data));}
-function sendText(res,status,text,headers={}){res.writeHead(status,{'content-type':'text/plain; charset=utf-8','x-content-type-options':'nosniff',...headers});res.end(text);}
+function sendJson(res,status,data,headers={}){res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'same-origin',...headers});res.end(JSON.stringify(data));}
+function sendText(res,status,text,headers={}){res.writeHead(status,{'content-type':'text/plain; charset=utf-8','x-content-type-options':'nosniff','referrer-policy':'same-origin',...headers});res.end(text);}
 async function bodyJson(req,limit=MAX_BODY){let size=0,chunks=[];for await(const chunk of req){size+=chunk.length;if(size>limit)throw Object.assign(new Error('Payload too large'),{status:413});chunks.push(chunk);}if(!chunks.length)return {};try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw Object.assign(new Error('Invalid JSON'),{status:400});}}
 function ensureCsrf(req,ctx){if(!ctx.session||req.headers['x-csrf-token']!==ctx.session.csrf)throw Object.assign(new Error('Invalid CSRF token'),{status:403});}
 function requireUser(ctx,roles=[]){if(!ctx.user)throw Object.assign(new Error('Authentication required'),{status:401});if(roles.length&&!roles.includes(ctx.user.role))throw Object.assign(new Error('Forbidden'),{status:403});return ctx.user;}
@@ -103,7 +113,7 @@ function includesUser(list,user){return !!user&&Array.isArray(list)&&list.includ
 function canViewSpace(user,space){if(!space||space.archived)return false;if(space.visibility==='public')return true;if(!user)return false;if(user.role==='admin')return true;if(space.visibility==='internal')return true;return includesUser(space.permissions?.view,user)||includesUser(space.permissions?.edit,user)||includesUser(space.permissions?.admin,user);}
 function canEditSpace(user,space){if(!user||!space||space.archived)return false;if(user.role==='admin')return true;if(!roleAtLeast(user,'editor'))return false;if(space.visibility!=='restricted')return true;return includesUser(space.permissions?.edit,user)||includesUser(space.permissions?.admin,user);}
 function canAdminSpace(user,space){return !!user&&(user.role==='admin'||includesUser(space?.permissions?.admin,user));}
-function canViewPage(user,page){const space=state.spaces.find(s=>s.id===page?.spaceId);if(!page||!canViewSpace(user,space))return false;if(page.archivedAt&&!(user&&canEditSpace(user,space)))return false;if(page.status!=='published'&&!canEditPage(user,page))return false;if(page.visibility==='restricted'&&!user)return false;if(Array.isArray(page.restrictions?.view)&&page.restrictions.view.length&&user?.role!=='admin'&&!includesUser(page.restrictions.view,user)&&!canEditPage(user,page))return false;return true;}
+function canViewPage(user,page){const space=state.spaces.find(s=>s.id===page?.spaceId);if(!page||!canViewSpace(user,space))return false;if(page.archivedAt&&!(user&&canEditSpace(user,space)))return false;if(page.status!=='published'&&!canEditPage(user,page))return false;if((page.visibility==='internal'||page.visibility==='restricted')&&!user)return false;if(Array.isArray(page.restrictions?.view)&&page.restrictions.view.length&&user?.role!=='admin'&&!includesUser(page.restrictions.view,user)&&!canEditPage(user,page))return false;return true;}
 function canEditPage(user,page){const space=state.spaces.find(s=>s.id===page?.spaceId);if(!page||!canEditSpace(user,space))return false;if(Array.isArray(page.restrictions?.edit)&&page.restrictions.edit.length&&user?.role!=='admin'&&!includesUser(page.restrictions.edit,user))return false;return true;}
 function effectivePages(user,spaceId=null){return state.pages.filter(p=>(!spaceId||p.spaceId===spaceId)&&canViewPage(user,p));}
 function uniqueSlug(spaceId,title,excludeId=null){const base=slugify(title);let slug=base,n=2;while(state.pages.some(p=>p.id!==excludeId&&p.spaceId===spaceId&&p.slug===slug&&!p.archivedAt))slug=`${base}-${n++}`;return slug;}
@@ -135,30 +145,30 @@ function searchPages(user,q,{spaceId=null,language=null,status=null,label=null}=
   }).filter(x=>x.score>0).sort((a,b)=>b.score-a.score||String(b.page.updatedAt).localeCompare(String(a.page.updatedAt))).slice(0,100);
 }
 
-function recordRecent(user,page){if(!user)return;state.recents=state.recents.filter(r=>!(r.userId===user.id&&r.pageId===page.id));state.recents.unshift({userId:user.id,pageId:page.id,viewedAt:now()});state.recents=state.recents.filter((r,i)=>i<500);void persist();}
+async function recordRecent(user,page){if(!user)return;await mutate(()=>{state.recents=state.recents.filter(r=>!(r.userId===user.id&&r.pageId===page.id));state.recents.unshift({userId:user.id,pageId:page.id,viewedAt:now()});state.recents=state.recents.slice(0,500);});}
 function toggleRecord(collection,userId,pageId){const idx=collection.findIndex(r=>r.userId===userId&&r.pageId===pageId);if(idx>=0){collection.splice(idx,1);return false;}collection.push({userId,pageId,createdAt:now()});return true;}
 function descendants(pageId){const out=[];const visit=id0=>{for(const p of state.pages.filter(x=>x.parentId===id0)){out.push(p.id);visit(p.id);}};visit(pageId);return out;}
 function wouldCycle(pageId,parentId){return parentId===pageId||descendants(pageId).includes(parentId);}
 
 function bearer(req){const raw=String(req.headers.authorization||'');if(!raw.startsWith('Bearer '))return null;const hash=sha256(raw.slice(7).trim());return state.tokens.find(t=>!t.revokedAt&&t.hash===hash)||null;}
 function tokenCan(token,scope){return !!token&&Array.isArray(token.scopes)&&token.scopes.includes(scope);}
-function tokenPageAllowed(token,page){return ['public',...(token.visibilities||[])].includes(page.visibility||'public')&&page.status==='published'&&!page.archivedAt;}
+function tokenPageAllowed(token,page){const space=state.spaces.find(s=>s.id===page?.spaceId);if(!space||space.archived||!page||page.status!=='published'||page.archivedAt)return false;const allowed=new Set(['public',...(token?.visibilities||[])]);return allowed.has(space.visibility||'internal')&&allowed.has(page.visibility||space.visibility||'internal');}
 
 async function directoryBytes(dir){let total=0;for(const entry of await readdir(dir,{withFileTypes:true}).catch(()=>[])){const path=join(dir,entry.name);if(entry.isDirectory())total+=await directoryBytes(path);else if(entry.isFile())total+=(await stat(path)).size;}return total;}
 
 function mimeFor(path){return ({'.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.html':'text/html; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.ico':'image/x-icon'}[extname(path).toLowerCase()]||'application/octet-stream');}
-async function serveStatic(pathname,res){const mapped=pathname==='/'?'index.html':pathname.slice(1);if(!['index.html','app.js','style.css','favicon.svg'].includes(mapped))return false;try{const data=await readFile(join(PUBLIC,mapped));res.writeHead(200,{'content-type':mimeFor(mapped),'cache-control':mapped==='index.html'?'no-cache':'public,max-age=300','x-content-type-options':'nosniff'});res.end(data);return true;}catch{return false;}}
+async function serveStatic(pathname,res){const mapped=pathname==='/'?'index.html':pathname.slice(1);if(!['index.html','app.js','style.css','favicon.svg'].includes(mapped))return false;try{const data=await readFile(join(PUBLIC,mapped));res.writeHead(200,{'content-type':mimeFor(mapped),'cache-control':mapped==='index.html'?'no-cache':'public,max-age=300','x-content-type-options':'nosniff','referrer-policy':'same-origin'});res.end(data);return true;}catch{return false;}}
 
 async function api(req,res,url){
   const ctx=sessionContext(req),method=req.method||'GET',path=url.pathname;
-  if(path==='/api/bootstrap'&&method==='GET')return sendJson(res,200,{version:VERSION,schemaVersion:SCHEMA_VERSION,setupRequired:state.users.length===0,user:publicUser(ctx.user),csrf:ctx.session?.csrf||null,settings:{brand:state.settings.brand||BRAND,defaultLanguage:state.settings.defaultLanguage||DEFAULT_LANG},spaces:state.spaces.filter(s=>canViewSpace(ctx.user,s)).map(s=>({...s,permissions:undefined}))});
+  if(path==='/api/bootstrap'&&method==='GET')return sendJson(res,200,{version:VERSION,schemaVersion:SCHEMA_VERSION,setupRequired:state.users.length===0,user:publicUser(ctx.user),csrf:ctx.session?.csrf||null,settings:{brand:state.settings.brand||BRAND,defaultLanguage:state.settings.defaultLanguage||DEFAULT_LANG},spaces:state.spaces.filter(s=>canViewSpace(ctx.user,s)).map(s=>({...s,permissions:canAdminSpace(ctx.user,s)?s.permissions:undefined,canEdit:canEditSpace(ctx.user,s),canAdmin:canAdminSpace(ctx.user,s)}))});
 
   if(path==='/api/setup'&&method==='POST'){
     if(state.users.length)throw Object.assign(new Error('Setup already completed'),{status:409});const b=await bodyJson(req);if(!validatePassword(b.password)||!String(b.email||'').includes('@'))throw Object.assign(new Error('Use a valid email and a password with at least 10 characters'),{status:400});
     const user=await mutate(()=>{const u={id:id('usr'),email:String(b.email).trim().toLowerCase(),name:String(b.name||'Administrator').trim().slice(0,120),role:'admin',language:b.language||DEFAULT_LANG,passwordHash:hashPassword(b.password),active:true,createdAt:now(),updatedAt:now()};state.users.push(u);audit('system.setup',u.id,{email:u.email});return u;});const {token,session}=newSession(user);return sendJson(res,201,{user:publicUser(user),csrf:session.csrf},{'set-cookie':cookie(token)});
   }
   if(path==='/api/login'&&method==='POST'){
-    const b=await bodyJson(req),email=String(b.email||'').trim().toLowerCase(),user=state.users.find(u=>u.email===email&&u.active!==false);if(!user||!verifyPassword(b.password,user.passwordHash))return sendJson(res,401,{error:'Invalid email or password'});const {token,session}=newSession(user);audit('auth.login',user.id,{});void persist();return sendJson(res,200,{user:publicUser(user),csrf:session.csrf},{'set-cookie':cookie(token)});
+    const b=await bodyJson(req),email=String(b.email||'').trim().toLowerCase(),user=state.users.find(u=>u.email===email&&u.active!==false);if(!user||!verifyPassword(b.password,user.passwordHash))return sendJson(res,401,{error:'Invalid email or password'});const {token,session}=newSession(user);await mutate(()=>audit('auth.login',user.id,{}));return sendJson(res,200,{user:publicUser(user),csrf:session.csrf},{'set-cookie':cookie(token)});
   }
   if(path==='/api/logout'&&method==='POST'){if(ctx.session)ensureCsrf(req,ctx);const token=parseCookies(req).kb_session;if(token)sessions.delete(token);return sendJson(res,200,{ok:true},{'set-cookie':cookie('',0)});}
 
@@ -170,7 +180,7 @@ async function api(req,res,url){
   let m=path.match(/^\/api\/spaces\/([^/]+)$/);if(m&&method==='PATCH'){
     const user=requireUser(ctx);ensureCsrf(req,ctx);const space=state.spaces.find(s=>s.id===m[1]);if(!space||!canAdminSpace(user,space))throw Object.assign(new Error('Forbidden'),{status:403});const b=await bodyJson(req);await mutate(()=>{for(const field of ['name','description','icon'])if(field in b)space[field]=String(b[field]).slice(0,field==='description'?1000:120);if(['public','internal','restricted'].includes(b.visibility))space.visibility=b.visibility;if(typeof b.archived==='boolean')space.archived=b.archived;if(b.permissions&&user.role==='admin')space.permissions={view:Array.isArray(b.permissions.view)?b.permissions.view:[],edit:Array.isArray(b.permissions.edit)?b.permissions.edit:[],admin:Array.isArray(b.permissions.admin)?b.permissions.admin:[]};space.updatedAt=now();audit('space.updated',user.id,{spaceId:space.id});});return sendJson(res,200,{space});
   }
-  m=path.match(/^\/api\/spaces\/([^/]+)\/tree$/);if(m&&method==='GET'){const space=state.spaces.find(s=>s.id===m[1]);if(!space||!canViewSpace(ctx.user,space))throw Object.assign(new Error('Not found'),{status:404});const pages=effectivePages(ctx.user,space.id).map(p=>pageSummary(p,ctx.user));return sendJson(res,200,{space:{...space,permissions:undefined},tree:buildTree(pages)});}
+  m=path.match(/^\/api\/spaces\/([^/]+)\/tree$/);if(m&&method==='GET'){const space=state.spaces.find(s=>s.id===m[1]);if(!space||!canViewSpace(ctx.user,space))throw Object.assign(new Error('Not found'),{status:404});const pages=effectivePages(ctx.user,space.id).map(p=>pageSummary(p,ctx.user));return sendJson(res,200,{space:{...space,permissions:canAdminSpace(ctx.user,space)?space.permissions:undefined,canEdit:canEditSpace(ctx.user,space),canAdmin:canAdminSpace(ctx.user,space)},tree:buildTree(pages)});}
 
   if(path==='/api/pages'&&method==='POST'){
     const user=requireUser(ctx,['editor','admin']);ensureCsrf(req,ctx);const b=await bodyJson(req),space=state.spaces.find(s=>s.id===b.spaceId);if(!space||!canEditSpace(user,space))throw Object.assign(new Error('Forbidden'),{status:403});if(b.parentId&&(!state.pages.some(p=>p.id===b.parentId&&p.spaceId===space.id)||!canEditPage(user,state.pages.find(p=>p.id===b.parentId))))throw Object.assign(new Error('Invalid parent page'),{status:400});const title=String(b.title||'Untitled').trim().slice(0,180)||'Untitled';
@@ -178,7 +188,7 @@ async function api(req,res,url){
   }
 
   m=path.match(/^\/api\/pages\/([^/]+)$/);if(m&&method==='GET'){
-    const page=state.pages.find(p=>p.id===m[1]);if(!page||!canViewPage(ctx.user,page))throw Object.assign(new Error('Not found'),{status:404});recordRecent(ctx.user,page);const attachments=state.attachments.filter(a=>a.pageId===page.id).map(a=>({...a,path:undefined}));return sendJson(res,200,{page:pageDetail(page,ctx.user),favorite:!!ctx.user&&state.favorites.some(r=>r.userId===ctx.user.id&&r.pageId===page.id),watched:!!ctx.user&&state.watches.some(r=>r.userId===ctx.user.id&&r.pageId===page.id),attachments,revisionCount:state.revisions.filter(r=>r.pageId===page.id).length});
+    const page=state.pages.find(p=>p.id===m[1]);if(!page||!canViewPage(ctx.user,page))throw Object.assign(new Error('Not found'),{status:404});await recordRecent(ctx.user,page);const attachments=state.attachments.filter(a=>a.pageId===page.id).map(a=>({...a,path:undefined}));return sendJson(res,200,{page:pageDetail(page,ctx.user),favorite:!!ctx.user&&state.favorites.some(r=>r.userId===ctx.user.id&&r.pageId===page.id),watched:!!ctx.user&&state.watches.some(r=>r.userId===ctx.user.id&&r.pageId===page.id),attachments,revisionCount:state.revisions.filter(r=>r.pageId===page.id).length});
   }
   m=path.match(/^\/api\/pages\/([^/]+)\/draft$/);if(m&&method==='PATCH'){
     const user=requireUser(ctx,['editor','admin']);ensureCsrf(req,ctx);const page=state.pages.find(p=>p.id===m[1]);if(!page||!canEditPage(user,page))throw Object.assign(new Error('Forbidden'),{status:403});const b=await bodyJson(req);if(b.version&&Number(b.version)!==Number(page.version))return sendJson(res,409,{error:'Page changed since it was opened',currentVersion:page.version});
@@ -213,7 +223,7 @@ async function api(req,res,url){
   if(path==='/api/attachments'&&method==='POST'){
     const user=requireUser(ctx,['editor','admin']);ensureCsrf(req,ctx);const b=await bodyJson(req),page=state.pages.find(p=>p.id===b.pageId);if(!page||!canEditPage(user,page))throw Object.assign(new Error('Forbidden'),{status:403});const buffer=Buffer.from(String(b.data||''),'base64');if(!buffer.length||buffer.length>MAX_ATTACHMENT)throw Object.assign(new Error('Attachment must be between 1 byte and 5 MB'),{status:400});const attachmentId=id('att'),name=safeName(b.name),diskName=`${attachmentId}${extname(name).slice(0,12)}`;await writeFile(join(UPLOAD_DIR,diskName),buffer);const attachment=await mutate(()=>{const a={id:attachmentId,pageId:page.id,name,mime:String(b.mime||'application/octet-stream').slice(0,120),size:buffer.length,path:diskName,userId:user.id,createdAt:now(),version:1};state.attachments.push(a);audit('attachment.created',user.id,{pageId:page.id,attachmentId:a.id,name});return a;});return sendJson(res,201,{attachment:{...attachment,path:undefined}});
   }
-  m=path.match(/^\/api\/attachments\/([^/]+)$/);if(m&&method==='GET'){const a=state.attachments.find(x=>x.id===m[1]),page=state.pages.find(p=>p.id===a?.pageId);if(!a||!page||!canViewPage(ctx.user,page))throw Object.assign(new Error('Not found'),{status:404});const data=await readFile(join(UPLOAD_DIR,a.path));res.writeHead(200,{'content-type':a.mime||'application/octet-stream','content-length':data.length,'content-disposition':`inline; filename="${safeName(a.name).replaceAll('"','')}"`,'x-content-type-options':'nosniff'});return res.end(data);}
+  m=path.match(/^\/api\/attachments\/([^/]+)$/);if(m&&method==='GET'){const a=state.attachments.find(x=>x.id===m[1]),page=state.pages.find(p=>p.id===a?.pageId);if(!a||!page||!canViewPage(ctx.user,page))throw Object.assign(new Error('Not found'),{status:404});const data=await readFile(join(UPLOAD_DIR,a.path));res.writeHead(200,{'content-type':a.mime||'application/octet-stream','content-length':data.length,'content-disposition':`attachment; filename="${safeName(a.name).replaceAll('"','')}"`,'x-content-type-options':'nosniff','content-security-policy':'sandbox','referrer-policy':'no-referrer'});return res.end(data);}
   if(m&&method==='DELETE'){const user=requireUser(ctx,['editor','admin']);ensureCsrf(req,ctx);const a=state.attachments.find(x=>x.id===m[1]),page=state.pages.find(p=>p.id===a?.pageId);if(!a||!page||!canEditPage(user,page))throw Object.assign(new Error('Forbidden'),{status:403});await unlink(join(UPLOAD_DIR,a.path)).catch(()=>{});await mutate(()=>{state.attachments=state.attachments.filter(x=>x.id!==a.id);audit('attachment.deleted',user.id,{attachmentId:a.id,pageId:page.id});});return sendJson(res,200,{ok:true});}
 
   if(path==='/api/admin/users'&&method==='GET'){requireUser(ctx,['admin']);return sendJson(res,200,{users:state.users.map(publicUser)});}
