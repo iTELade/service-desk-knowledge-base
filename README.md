@@ -1,26 +1,46 @@
 # iTELade Service Desk Knowledge Base
 
-Central knowledge base repository synchronized with **iTELade Service Desk** and deployable as a standalone Docker container.
+Self-hosted, Confluence-inspired knowledge platform for technical documentation, runbooks, procedures and customer-facing knowledge. It runs independently from iTELade Service Desk and exposes a scoped API that Service Desk can consume as an external knowledge source.
 
-English is the primary language. Polish is maintained as an additional supported language.
+**Current application version: 0.5.0**  
+**Data schema: 1**  
+**Default UI/content language: English**  
+**Additional supported UI/content language: Polish**
 
-## Current scope
+## What 0.5.0 changes
 
-This repository now contains a first runnable knowledge-base skeleton:
+0.5.0 replaces the original read-only Markdown catalogue with an actual Knowledge Base application.
 
-- Markdown articles stored in Git,
-- YAML front matter for article metadata,
-- public read-only web UI,
-- article search,
-- language filtering,
-- Dockerfile,
-- Docker Compose deployment,
-- `/healthz` endpoint for container health checks,
-- no external runtime dependencies.
+The product now includes:
 
-The application is intentionally small at this stage so it can later be connected to iTELade Service Desk as the Confluence-like knowledge module.
+- Confluence-like spaces with stable keys, descriptions, icons and visibility,
+- hierarchical pages with a persistent page tree,
+- drag/drop page moves in the navigation tree,
+- draft autosave and explicit publishing,
+- immutable published revision history and restore-as-draft,
+- public, internal and restricted visibility modes,
+- local user accounts with `viewer`, `editor` and `admin` roles,
+- first-run local administrator setup,
+- password hashing with Node.js `scrypt`,
+- session cookies and CSRF protection for mutations,
+- global, permission-aware search,
+- labels, recent pages and starred pages,
+- page watches,
+- comments, replies and resolve/reopen state,
+- page attachments up to 5 MB,
+- audit log,
+- system health and storage overview,
+- JSON backup export,
+- scoped service API tokens,
+- stable Service Desk search/page API,
+- English/Polish UI switch,
+- responsive light-only Confluence/JSM-inspired interface,
+- Docker persistence through `/data`,
+- automatic import of the old Git-backed Markdown articles on first start.
 
-## Run with Docker Compose
+The Knowledge Base remains a standalone product. Service Desk is a consumer of its API, not a runtime dependency.
+
+## Quick start
 
 ```bash
 git clone https://github.com/iTELade/service-desk-knowledge-base.git
@@ -28,140 +48,192 @@ cd service-desk-knowledge-base
 docker compose up -d --build
 ```
 
-The knowledge base will be available on:
+Open:
 
 ```text
 http://SERVER_IP:8080
 ```
 
-Health check:
+On an empty data volume the application opens a one-time setup flow for the local administrator.
+
+For production use put the container behind HTTPS (for example Nginx Proxy Manager). Secure session cookies are enabled by default.
+
+## Docker Compose
+
+`compose.yml` persists all mutable state and uploads in the named volume `knowledge-base-data`:
+
+```yaml
+volumes:
+  - knowledge-base-data:/data
+```
+
+Important environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `8080` | HTTP listen port |
+| `KB_DATA_DIR` | `/data` | Persistent state and attachment storage |
+| `KB_BRAND` | `iTELade Knowledge Base` | Product name displayed in the UI |
+| `KB_DEFAULT_LANG` | `en` | Default language for new content |
+| `KB_SECURE_COOKIE` | secure | Set to `false` only for local HTTP development |
+
+Health endpoint:
 
 ```text
-http://SERVER_IP:8080/healthz
+GET /healthz
 ```
 
-For reverse proxy deployment, point Nginx Proxy Manager or another reverse proxy to the Docker host on port `8080`.
+## Product model
 
-## Run directly with Docker
+### Spaces
 
-```bash
-docker build -t itelade/knowledge-base:local .
-docker run -d \
-  --name itelade-knowledge-base \
-  --restart unless-stopped \
-  -p 8080:8080 \
-  -e KB_BRAND="iTELade Knowledge Base" \
-  -e KB_DEFAULT_LANG=en \
-  itelade/knowledge-base:local
+Spaces are the top-level documentation boundary. Every space has:
+
+- a stable ID and key,
+- name, description and icon,
+- `public`, `internal` or `restricted` visibility,
+- page hierarchy,
+- optional user-level view/edit/admin grants for restricted spaces.
+
+### Pages
+
+Pages have stable IDs independent from title/slug changes and support:
+
+- parent/child hierarchy,
+- language metadata,
+- summary and labels,
+- draft content,
+- explicit publishing,
+- published revisions,
+- archive/restore,
+- per-page view/edit restrictions,
+- comments, attachments, favorites and watches.
+
+The editor uses a safe Markdown content model with a rich authoring toolbar and live preview. Rendering escapes raw HTML before applying supported formatting so page content cannot inject arbitrary HTML/JavaScript.
+
+### Roles
+
+- `viewer` — authenticated reader/commenter,
+- `editor` — creates and maintains content in allowed spaces,
+- `admin` — system, identity, integration and all-content administration.
+
+A local administrator is always available as an emergency/break-glass account even when enterprise identity providers are added later.
+
+## Service Desk API
+
+Create a token in **Administration → API tokens**. The token secret is shown once.
+
+Authentication:
+
+```http
+Authorization: Bearer kb_<secret>
 ```
+
+Available integration endpoints:
+
+```text
+GET /api/v1/health
+GET /api/v1/search?q=reset&language=en
+GET /api/v1/pages/:stablePageId
+```
+
+Scopes:
+
+- `health`
+- `search`
+- `read`
+
+A token can additionally be allowed to read internal knowledge. Restricted content is not returned unless that visibility is explicitly granted to the token.
+
+This API is the intended integration direction:
+
+```text
+Service Desk  ─────►  Knowledge Base API
+```
+
+Knowledge Base does not require Service Desk to start, authenticate users, edit pages or serve knowledge.
+
+## Legacy Markdown import
+
+The existing `articles/` directory is preserved for migration compatibility. On the first start of a fresh 0.5.0 data volume, published legacy articles are imported into a `DOCS` space and converted into native pages/revisions.
+
+After import, `/data/knowledge-base.json` becomes the authoritative mutable application store. Existing Git Markdown files are not continuously mirrored back into the runtime store.
+
+## Persistence and backup
+
+Persistent runtime files:
+
+```text
+/data/knowledge-base.json
+/data/uploads/
+```
+
+Administrators can download a JSON backup from the Administration page. Token hashes are redacted from that browser export.
+
+For infrastructure-level backup, back up the complete `/data` volume while the container is stopped or use a storage snapshot with filesystem consistency guarantees.
 
 ## Repository structure
 
 ```text
-articles/
-  en/
-    getting-started/
-    troubleshooting/
-    administration/
-    security/
-  pl/
-    getting-started/
-    troubleshooting/
-    administration/
-    security/
-config/
-  categories.yml
-  schema.yml
-docs/
-  SYNC.md
-  AUTHORING.md
+articles/                 legacy/import seed content
+config/                   legacy content metadata documentation
+docs/                     architecture and integration documentation
 public/
-  style.css
-templates/
-server.mjs
-Dockerfile
+  index.html              application shell
+  app.js                  SPA controller
+  style.css               canonical product design system
+  favicon.svg
+server.mjs                HTTP API, persistence, auth and rendering
 compose.yml
+Dockerfile
+tests/
 ```
 
-## Article format
+## Security baseline
 
-Each article is a Markdown file with YAML front matter. Articles in different languages that describe the same subject share the same `article_id`.
+0.5.0 includes:
 
-```yaml
----
-article_id: kb-0001
-language: en
-translation_of: null
-status: published
-visibility: public
-category: getting-started
-slug: welcome-to-service-desk
-title: Welcome to iTELade Service Desk
-summary: Basic introduction to iTELade Service Desk.
-tags:
-  - getting-started
-  - service-desk
-service_desk:
-  sync: true
-  project_keys: []
-  article_key: null
-updated_at: 2026-09-14
----
+- `scrypt` password hashing with per-password salts,
+- HttpOnly + SameSite=Lax session cookies,
+- Secure cookies by default,
+- CSRF token validation for authenticated mutations,
+- permission checks on every page/search/attachment API,
+- no raw HTML execution from page Markdown,
+- 5 MB attachment size limit,
+- safe generated attachment storage names,
+- scoped and revocable integration tokens stored only as SHA-256 hashes,
+- audit events for content, identity and integration changes.
+
+## CI
+
+Every pull request to `main` runs:
+
+```bash
+npm run check
+npm test
+docker build ...
+container health/bootstrap smoke test
 ```
 
-The Polish translation uses the same `article_id` and sets `translation_of: en`.
+The application test suite covers first-run setup, authenticated sessions, spaces, drafts, publishing, revisions, permission-aware search, comments, favorites, attachments and Service Desk API tokens.
 
-## Synchronization model
+## Roadmap after 0.5.0
 
-Service Desk should synchronize knowledge articles by `article_id`, not by filename. GitHub remains the version-controlled source for Markdown content, while Service Desk may keep its own internal record ID in `service_desk.article_key`.
+The core is intentionally designed so the next releases can add enterprise identity and richer collaboration without replacing the page model:
 
-See [`docs/SYNC.md`](docs/SYNC.md) for the synchronization contract.
+- OIDC / Keycloak login,
+- LDAP / Active Directory synchronization and group mapping,
+- richer WYSIWYG/block editor,
+- groups and more granular inherited permission UI,
+- review/approval workflow before publication,
+- notifications for watches and mentions,
+- attachment version replacement and optional antivirus hook,
+- translation relationship management,
+- advanced full-text index and relevance tuning,
+- richer Service Desk suggestions and article linking UI.
 
-## Planned application direction
+Those are follow-up features, not prerequisites for the standalone 0.5.0 Confluence Core.
 
-The next stages can add:
+## License
 
-- Service Desk SSO,
-- public/internal/restricted article permissions,
-- editor and draft/review/publish workflow,
-- categories and spaces,
-- attachments and images,
-- article version history,
-- Service Desk ticket ↔ KB article linking,
-- automatic suggestions from tickets,
-- GitHub webhook synchronization,
-- full-text indexing,
-- API for Service Desk.
-
-## Workflow
-
-1. Create or edit an article in this repository.
-2. Validate its front matter and Markdown.
-3. Merge the change into `main`.
-4. Service Desk detects the new commit or receives a webhook.
-5. Service Desk creates or updates the corresponding knowledge article.
-6. Sync state and errors are recorded by Service Desk.
-
-## Language policy
-
-- Primary/default language: **English (`en`)**
-- Additional supported language: **Polish (`pl`)**
-- Missing translations should fall back to English.
-- Additional languages can be added later without changing the article identity model.
-
-## Status values
-
-- `draft` — not visible to end users
-- `review` — awaiting review
-- `published` — visible according to `visibility`
-- `archived` — retained for history but hidden from normal browsing
-
-## Visibility values
-
-- `public` — available to all users allowed to access the knowledge base
-- `internal` — available only to agents/internal users
-- `restricted` — visibility controlled by Service Desk project or role mapping
-
-## Contribution
-
-See [`docs/AUTHORING.md`](docs/AUTHORING.md) before adding new content.
+Use and distribution are governed by the license in this repository. Do not expose secrets, production backups or integration tokens in Git.

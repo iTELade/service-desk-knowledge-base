@@ -1,0 +1,84 @@
+name: Publish Knowledge Base version
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+      - server.mjs
+      - public/**
+      - Dockerfile
+      - compose.yml
+      - RELEASE_NOTES_*.md
+      - .github/workflows/publish-version.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Validate release version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          SERVER_VERSION=$(node -e "const s=require('fs').readFileSync('server.mjs','utf8'); const m=s.match(/VERSION='([^']+)'/); if(!m)process.exit(2); process.stdout.write(m[1])")
+          SCHEMA=$(node -e "const s=require('fs').readFileSync('server.mjs','utf8'); const m=s.match(/SCHEMA_VERSION=(\d+)/); if(!m)process.exit(2); process.stdout.write(m[1])")
+          test "$VERSION" = "$SERVER_VERSION"
+          test -f "RELEASE_NOTES_${VERSION}.md"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "schema=$SCHEMA" >> "$GITHUB_OUTPUT"
+
+      - name: Install and test
+        run: |
+          npm run check
+          npm test
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/itelade/service-desk-knowledge-base:v${{ steps.version.outputs.version }}
+            ghcr.io/itelade/service-desk-knowledge-base:latest
+
+      - name: Publish release manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SCHEMA: ${{ steps.version.outputs.schema }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cat > kb-release.json <<EOF
+          {
+            "version": "$VERSION",
+            "schema": $SCHEMA,
+            "image": "ghcr.io/itelade/service-desk-knowledge-base:v$VERSION",
+            "digest": "$DIGEST",
+            "commit": "$GITHUB_SHA"
+          }
+          EOF
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" kb-release.json --clobber
+          else
+            gh release create "v$VERSION" kb-release.json --title "iTELade Knowledge Base $VERSION" --notes-file "RELEASE_NOTES_${VERSION}.md" --target "$GITHUB_SHA"
+          fi
