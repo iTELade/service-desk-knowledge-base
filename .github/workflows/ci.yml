@@ -16,14 +16,17 @@ jobs:
           node-version: 24
       - name: Syntax check
         run: npm run check
+      - name: Application tests
+        run: npm test
       - name: Docker build
         run: docker build -t itelade-kb:test .
       - name: Container smoke test
         run: |
-          docker run -d --name kb-test -p 18080:8080 itelade-kb:test
-          for i in {1..20}; do
-            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null; then exit 0; fi
+          docker run -d --name kb-test -p 18080:8080 -e KB_SECURE_COOKIE=false itelade-kb:test
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null; then break; fi
             sleep 1
           done
-          docker logs kb-test
-          exit 1
+          curl -fsS http://127.0.0.1:18080/healthz
+          curl -fsS http://127.0.0.1:18080/ | grep -q "iTELade Knowledge Base"
+          curl -fsS http://127.0.0.1:18080/api/bootstrap | grep -q '"version":"0.5.0"'
