@@ -1,14 +1,15 @@
 {
   "name": "itelade-service-desk-knowledge-base",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
-  "description": "Docker-ready knowledge base frontend for iTELade Service Desk.",
+  "description": "Self-hosted Confluence-like knowledge platform for iTELade Service Desk and standalone documentation.",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs"
+    "check": "node --check server.mjs && node --check public/app.js",
+    "test": "node --test"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=24 <25"
   }
 }
